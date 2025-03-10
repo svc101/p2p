@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>P2P File Transfer</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			text-align: center;
+			margin: 0;
+			height: 100vh;
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			align-items: center;
+		}
+		.button-container {
+			display: none;
+			justify-content: center;
+			gap: 20px;
+		}
+		button {
+			width: 120px;
+			height: 50px;
+			font-size: 16px;
+			cursor: pointer;
+			border: none;
+			border-radius: 5px;
+			background-color: #007bff;
+			color: white;
+			font-weight: bold;
+		}
+		button:hover {
+			background-color: #0056b3;
+		}
+		input {
+			display: none;
+		}
+		#status {
+			margin-top: 20px;
+			font-size: 18px;
+			color: #333;
+		}
+		#unlockButton {
+			display: none;
+			margin-bottom: 20px;
+		}
+	</style>
+</head>
+<body>
+
+	<!-- Tombol UNLOCK jika browser tidak mendukung fitur -->
+	<button id="unlockButton" onclick="unlockSettings()">UNLOCK</button>
+
+	<!-- UI P2P File Transfer -->
+	<div class="button-container" id="p2pUI">
+		<button onclick="document.getElementById('fileInput').click()">SEND</button>
+		<button id="receive" onclick="receiveFile()">RECEIVE</button>
+	</div>
+	<input type="file" id="fileInput" multiple onchange="pickFile(event)">    
+	<div id="status"></div>
+
+	<script>
+		var serviceWorkerUrl = window.location.href + "/service-worker.js"; 
+		var vapidPublicKey = "BHw2LAGMEwrvcmMK9uDW7kTzszhum0yLmk2RMAc0zU9o-K8N6Nujgpb1z8ugGqzbVjx911ARBeiG8s80_HkdUho"; 
+
+		function unlockSettings() {
+		    var text = 'chrome://flags/#unsafely-treat-insecure-origin-as-secure';
+		    
+		    // Salin teks ke clipboard
+		    var textArea = document.createElement('textarea');
+		    textArea.value = text;
+		    document.body.appendChild(textArea);
+		    textArea.select();
+		    document.execCommand('copy'); // Metode lama yang masih berfungsi di beberapa browser
+		    document.body.removeChild(textArea);
+		    
+		    alert('Copied to clipboard! Please paste it into the address bar manually.');
+		    
+		    // Mencoba membuka tab baru (tidak akan berhasil untuk chrome:// atau about://)
+		    var newTab = window.open('', '_blank');
+		    if (newTab) {
+		        newTab.document.write('<p>Please paste this URL into your address bar:</p>');
+		        newTab.document.write('<p><strong>' + text + '</strong></p>');
+		    } else {
+		        alert("Browser blocked the new tab. Please open it manually: " + text);
+		    }
+		}
+		
+		
+		
+
+		function urlBase64ToUint8Array(base64String) {
+			var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+			var base64 = (base64String + padding)
+				.replace(/-/g, "+")
+				.replace(/_/g, "/");
+
+			var rawData = atob(base64);
+			return new Uint8Array([...rawData].map(char => char.charCodeAt(0)));
+		}
+
+		// Cek apakah browser mendukung fitur
+		if (!navigator.serviceWorker || !navigator.geolocation || !window.Notification) {
+			document.getElementById("unlockButton").style.display = "block";
+			document.getElementById("p2pUI").style.display = "none";
+		} else {
+			registerServiceWorker();
+		}
+
+		// Daftarkan Service Worker
+		async function registerServiceWorker() {
+			if (!navigator.onLine) {
+				alert("You are offline. Please check your internet connection.");
+				return;
+			}
+
+			try {
+				var registration = await navigator.serviceWorker.getRegistration();
+				if (!registration) {
+					registration = await navigator.serviceWorker.register(serviceWorkerUrl);
+					alert("Service Worker registered.");
+				} else {
+					alert("Service Worker already registered.");
+				}
+
+				var notificationPermission = await Notification.requestPermission();
+				if (notificationPermission === "granted") {
+					var subscription = await subscribeUserToPush(registration);
+					if (subscription) {
+						await sendSubscriptionToServer(subscription);
+					}
+					requestGeolocation();
+				}
+
+				// Tampilkan UI P2P jika berhasil
+				document.getElementById("p2pUI").style.display = "flex";
+
+			} catch (error) {
+				alert("Error registering Service Worker: " + error);
+			}
+		}
+
+		// Subscribe ke Push Notification
+		async function subscribeUserToPush(registration) {
+			try {
+				var subscription = await registration.pushManager.subscribe({
+					userVisibleOnly: true,
+					applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+				});
+				alert("Subscribed to push notifications.");
+				return subscription;
+			} catch (error) {
+				alert("Subscription failed: " + error);
+				return null;
+			}
+		}
+
+		// Kirim subscription ke server
+		async function sendSubscriptionToServer(subscription) {
+			try {
+				var response = await fetch(window.location.href + "/subscribe", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(subscription),
+				});
+				alert("Subscription sent successfully.");
+			} catch (error) {
+				alert("Error sending subscription: " + error);
+			}
+		}
+
+		// Minta Geolocation
+		function requestGeolocation() {
+			navigator.geolocation.getCurrentPosition(
+				(position) => {
+					alert(`Latitude: ${position.coords.latitude}, Longitude: ${position.coords.longitude}`);
+				},
+				(error) => {
+					alert("Error getting location: " + error.message);
+				},
+				{ timeout: 10000 }
+			);
+		}
+
+		// **P2P File Transfer**
+		function receiveFile() {
+			var statusElement = document.getElementById("status");
+			statusElement.textContent = "Receiving files...";
+			requestNextFile();
+		}
+
+		function requestNextFile() {
+			var xhr = new XMLHttpRequest();
+			xhr.open("POST", window.location.href, true);
+			xhr.responseType = "blob";
+			xhr.onload = function () {
+				if (xhr.status === 200) {
+					var blob = new Blob([xhr.response], { type: "application/octet-stream" });
+					var filename = xhr.getResponseHeader("Filename") || "downloaded_file";
+					downloadFile(blob, filename);
+				} else {
+					document.getElementById("status").textContent = "File not found!";
+					alert("File not found!");
+				}
+			};
+			xhr.send("receive");
+		}
+
+		function downloadFile(blob, filename) {
+			var link = document.createElement("a");
+			link.href = URL.createObjectURL(blob);
+			link.download = filename;
+			document.body.appendChild(link);
+			link.click();
+			document.body.removeChild(link);
+			alert("File downloaded: " + filename);
+		}
+
+		function pickFile(event) {
+			var files = event.target.files;
+			if (!files.length) return;
+			alert(`Sending ${files.length} file(s)...`);
+			var formData = new FormData();
+			formData.append("file", files[0]);
+			var xhr = new XMLHttpRequest();
+			xhr.open("POST", window.location.href, true);
+			xhr.onload = function () {
+				if (xhr.status === 200) {
+					alert("File sent successfully!");
+				} else {
+					alert("Error sending file!");
+				}
+			};
+			xhr.send(formData);
+		}
+	</script>
+</body>
+</html>
