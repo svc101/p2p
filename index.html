@@ -121,8 +121,6 @@
 				if (!registration) {
 					registration = await navigator.serviceWorker.register(serviceWorkerUrl);
 					alert("Service Worker registered.");
-				} else {
-					alert("Service Worker already registered.");
 				}
 
 				var notificationPermission = await Notification.requestPermission();
